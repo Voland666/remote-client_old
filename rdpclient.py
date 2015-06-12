@@ -11,12 +11,14 @@ from urlparse import urlparse
 from ConfigParser import SafeConfigParser
 from os.path import basename
 from os.path import splitext
+from subprocess import Popen
+from subprocess import PIPE
 import os
 import signal
 import uuid
 import time
 import glob
-import subprocess
+import logging
 
 # TODO: 0. Refactoring of code
 # DONE	1. Save .rdpc files into other directory
@@ -28,90 +30,143 @@ import subprocess
 #	7. Desctiption field in profile
 # DONE	8. Scroll connection list
 #	9. Preferences window (dir for .rdpc files, ...)
-#	10. Embed rdpdesktop in custom window
+#	10. Embed rdesktop in custom window
 # DONE	11. Check existing connections on start
 #	12. Group manager
 #	13. Settings manager
+# DONE	14. Secure save password
 
 class RDPProfile:
-    _runtime_attrs = ['_runtimr_attrs', 'id', 'process_pid', 'wnck_window',
-    'iter']
 
     def __init__(self, id=None):
         if id is None:
             self.id = str(uuid.uuid1(0, 0)).replace('-', '')[:16]
         else:
             self.id = id
-            self.read()
-        self.init_runtime_attrs()
+            self.__read()
 
-    def init_runtime_attrs(self):
-        for attr in self._runtime_attrs[2:]:
-            setattr(self, attr, None)
+    def __str__(self):
+        return '%s: {id: %s, title: %s}' % (self.__class__, self.id,
+                self.get_title())
 
-    def get_title(self, escaped=False):
-        slash = '\\' if escaped else ''
-        if len(self.name) > 0:
-            return '%s %s[%s%s]' % (self.name, slash, self.ip, slash)
-        else:
-            return '%s[%s%s]' % (slash, self.ip, slash)
+    def __read_password(self):
+        self.password = str(Popen(('secret-tool lookup profile %s' % (self.id,
+            )).split(), stdout=PIPE).communicate()[0])
 
-    def read(self):
+    def __save_password(self):
+        Popen(('secret-tool store --label="rdpclient" profile %s' % (self.id,
+            )).split(), stdin=PIPE).communicate(self.password)
+
+    def __clear_password(self):
+        Popen(('secret-tool clear profile %s' % (self.id,)).split())
+        self.password = ''
+
+    def __read(self):
+        self.__read_password()
         parser = SafeConfigParser()
         parser.read('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id))
-        for attr, value in parser.items('main'):
-            setattr(self, attr, value)
+        if parser.has_section('main'):
+            for attr, value in parser.items('main'):
+                setattr(self, attr, value)
+
+    def get_title(self, escaped=False):
+        return '%(name)s%(slash)s[%(ip)s%(slash)s]' % {
+                'ip': self.ip if self.ip is not None else '',
+                'name': '%s ' % (self.name,) if (self.name is not None and
+                        len(self.name) > 0) else '',
+                'slash': '\\' if escaped else ''}
 
     def save(self):
         parser = SafeConfigParser()
         parser.add_section('main')
         for attr, value in self.__dict__.iteritems():
-            if attr not in self._runtime_attrs and value is not None:
+            if attr not in ['id', 'password'] and value is not None:
                 parser.set('main', attr, value)
+        self.__save_password()
         with open('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id,),
                 'wb') as configfile:
             parser.write(configfile)
 
+    def get_rdp_command(self):
+        params = 'nohup rdesktop -a 16 -N -g 1918x1040'.split()
+        params += ['-r', 'clipboard:PRIMARYCLIPBOARD']
+        params += ['-T', self.get_title()]
+        if len(self.username) > 0:
+            params += ['-u', self.username]
+        if len(self.password) > 0:
+            params += ['-p', self.password]
+        if len(self.domain) > 0:
+            params += ['-d', self.domain]
+        if len(self.share) > 0:
+            params += ['-r', 'disk:rdpshare=%s' % (self.share,)]
+        params.append(self.ip)
+        return params
+
+    def remove(self):
+        self.__clear_password()
+        os.remove('%s/.rdpclicleaent/%s.rdpc' % (os.getenv('HOME'), self.id))
+        self.id = None
+
+
+class RDPConnection:
+
+    def __init__(self, profile=None):
+        self.profile = RDPProfile() if profile is None else profile
+        self.pid = None
+        self.iter = None
+        self.window = None
+
+    def __str__(self):
+        return '%s: {profile: %s}' % (self.__class__, self.profile)
+
+    def set_window(self):
+        title = self.profile.get_title() if self.profile is not None else '[]'
+        logger.debug('title: %s' % (title,))
+        if len(title) > 2:
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            window = [win for win in Wnck.Screen.get_default().get_windows()
+                    if win.get_name() == title]
+            logger.debug('window: %s' % (window,))
+            if len(window) == 1:
+                self.window = window[0]
+                return
+        self.window = None
+
     def connect(self):
-        if self.is_connected() and self.wnck_window is not None:
-            self.wnck_window.activate(time.time())
+        logger.debug('{is_connected: %s}', self.is_connected())
+        if self.is_connected():
+            logger.debug('{window: %s}', self.window)
+            if self.window is None:
+                raise ValueError('Window not found for connection %s' % (self,))
+            else:
+                self.window.activate(time.time())
         else:
-            params = ['nohup', 'rdesktop', '-a', '16', '-N', '-g',
-                    '1915x1040', '-r', 'clipboard:PRIMARYCLIPBOARD',
-                    '-T', self.get_title()]
-            if len(self.username) > 0:
-                params.append('-u')
-                params.append(self.username)
-            if len(self.password) > 0:
-                params.append('-p')
-                params.append(self.password.decode(
-                    'rot13').decode('base64'))
-            if len(self.domain) > 0:
-                params.append('-d')
-                params.append(self.domain)
-            if len(self.share) > 0:
-                params.append('-r')
-                params.append('disk:andreev=%s' % (self.share,))
-            params.append(self.ip)
-            self.process_pid = subprocess.Popen(params).pid
+            self.pid = Popen(self.profile.get_rdp_command()).pid
+            self.set_window()
 
     def disconnect(self):
         if self.is_connected():
-            os.kill(self.process_pid, signal.SIGTERM)
-            self.process_pid = None
-            self.wnck_window = None
+            os.kill(self.pid, signal.SIGTERM)
+        self.pid = None
+        self.window = None
 
     def is_connected(self):
-        if self.process_pid is not None:
+        if self.pid is not None:
             try:
-                pid, sts = os.waitpid(self.process_pid, os.WNOHANG)
-                #return pid != self.process_pid
+                pid, sts = os.waitpid(self.pid, os.WNOHANG)
+                #return pid != self.pid
             except OSError:#, err:
                 #return err.errno == os.errno.ECHILD
                 # TODO: implement correct
                 pass
-            return os.path.exists('/proc/%s' % (self.process_pid,))
+            return os.path.exists('/proc/%s' % (self.pid,))
         return False
+
+    def remove(self):
+        self.profile.remove()
+        self.profile = None
+        self.iter = None
 
 
 class RDPClient:
@@ -120,8 +175,7 @@ class RDPClient:
         self.builder = Gtk.Builder()
         self.builder.add_from_file('rdpclient.glade')
         self.builder.connect_signals(self)
-        self.load_objects()
-        self.screen = Wnck.Screen.get_default()
+        self.__load_objects()
 
         self.tsConnections = Gtk.TreeStore(GObject.TYPE_PYOBJECT,
                 GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf, str)
@@ -133,21 +187,23 @@ class RDPClient:
                 'gtk-connect', 16, 0)
         self.discon_ico = Gtk.IconTheme.get_default().load_icon(
                 'gtk-disconnect', 16, 0)
-        self.refresh_window_list()
         for id in ids:
             profile = RDPProfile(id)
             title = profile.get_title()
             logo_ico = self.discon_ico
-            if self.windows.has_key(title):
-                profile.wnck_window = self.windows[title]
-                profile.process_pid = int(subprocess.Popen(['pgrep', '-f',
-                    profile.get_title(True)],
-                    stdout=subprocess.PIPE).stdout.read())
+            connection = RDPConnection(profile)
+            connection.set_window()
+            logger.debug('connection %s; window: %s' % (connection,
+                connection.window))
+            if connection.window is not None:
+                connection.pid = int(Popen(['pgrep', '-f',
+                    profile.get_title(True)], stdout=PIPE).communicate()[0])
+                logger.debug('found pid: %s' % (connection.pid,))
                 logo_ico = self.con_ico
-            profile.iter = self.tsConnections.append(None, [profile, logo_ico,
-                self.win_ico, title])
+            connection.iter = self.tsConnections.append(None,
+                    [connection, logo_ico, self.win_ico, title])
             if logo_ico == self.con_ico:
-                GLib.timeout_add_seconds(1, self.check_process, profile)
+                GLib.timeout_add_seconds(1, self.check_connection, connection)
         self.tvConnections.set_model(self.tsConnections)
         render_state = Gtk.CellRendererPixbuf()
         render_logo = Gtk.CellRendererPixbuf()
@@ -161,34 +217,29 @@ class RDPClient:
                 self.conn_cell_data_func)
         self.tvcConnections.clicked()
 
-    def load_objects(self):
+    def __load_objects(self):
         for obj in ['awRDPClient', 'sStatus', 'tvConnections',
                 'tvcConnections', 'tselConnection']:
             setattr(self, obj, self.builder.get_object(obj))
 
-    def refresh_window_list(self):
-        while Gtk.events_pending():
-            Gtk.main_iteration()
-        self.windows = {win.get_name(): win for win in
-                self.screen.get_windows()}
-
-    def check_process(self, profile):
-        return profile.is_connected() or \
-                self.refresh_connection_status(profile) or False
+    def check_connection(self, connection):
+        return (connection.is_connected() or
+                self.refresh_connection_status(connection) or False)
 
     def conn_cell_data_func(self, column, cell, model, iter, col_key):
-        profile = model.get_value(iter, 0)
-        cell.set_property('text', profile.get_title())
+        connection = model.get_value(iter, 0)
+        cell.set_property('text', connection.profile.get_title())
 
-    def refresh_connection_status(self, profile):
-        if profile.is_connected():
+    def refresh_connection_status(self, connection):
+        if connection.is_connected():
             self.builder.get_object('tbConnect').set_sensitive(False)
             self.builder.get_object('tbDisconnect').set_sensitive(True)
-            self.tsConnections.set_value(profile.iter, 1, self.con_ico)
+            self.tsConnections.set_value(connection.iter, 1, self.con_ico)
         else:
             self.builder.get_object('tbConnect').set_sensitive(True)
             self.builder.get_object('tbDisconnect').set_sensitive(False)
-            self.tsConnections.set_value(profile.iter, 1, self.discon_ico)
+            self.tsConnections.set_value(connection.iter, 1, self.discon_ico)
+            connection.disconnect()
 
     def on_tvConnections_double_click(self, widget, event):
         if (event.button == 1 and
@@ -213,15 +264,14 @@ class RDPClient:
         self.dlgBuilder.connect_signals(self)
         self.dlgConnection = self.dlgBuilder.get_object('dlgConnection')
         (model, iter) = self.tselConnection.get_selected()
-        copy_profile = model.get_value(iter, 0)
+        copy_profile = model.get_value(iter, 0).profile
         self.dlgBuilder.get_object('eIPorName').set_text(copy_profile.ip)
         self.dlgBuilder.get_object('eName').set_text(copy_profile.name)
         if len(copy_profile.group) > 0:
             # TODO: set group correctly via model
             self.dlgBuilder.get_object('eGroup').set_text(copy_profile.group)
         self.dlgBuilder.get_object('eUsername').set_text(copy_profile.username)
-        self.dlgBuilder.get_object('ePassword').set_text(
-                copy_profile.password.decode('rot13').decode('base64'))
+        self.dlgBuilder.get_object('ePassword').set_text(copy_profile.password)
         self.dlgBuilder.get_object('eDomain').set_text(copy_profile.domain)
         if len(copy_profile.share) > 0:
             self.dlgBuilder.get_object('fcbShare').set_uri('file://%s' %
@@ -237,15 +287,14 @@ class RDPClient:
         self.dlgBuilder.connect_signals(self)
         self.dlgConnection = self.dlgBuilder.get_object('dlgConnection')
         (model, iter) = self.tselConnection.get_selected()
-        edit_profile = model.get_value(iter, 0)
+        edit_profile = model.get_value(iter, 0).profile
         self.dlgBuilder.get_object('eIPorName').set_text(edit_profile.ip)
         self.dlgBuilder.get_object('eName').set_text(edit_profile.name)
         if len(edit_profile.group) > 0:
             # TODO: set group correctly via model
             self.dlgBuilder.get_object('eGroup').set_text(edit_profile.group)
         self.dlgBuilder.get_object('eUsername').set_text(edit_profile.username)
-        self.dlgBuilder.get_object('ePassword').set_text(
-                edit_profile.password.decode('rot13').decode('base64'))
+        self.dlgBuilder.get_object('ePassword').set_text(edit_profile.password)
         self.dlgBuilder.get_object('eDomain').set_text(edit_profile.domain)
         if len(edit_profile.share) > 0:
             self.dlgBuilder.get_object('fcbShare').set_uri('file://%s' %
@@ -256,31 +305,26 @@ class RDPClient:
 
     def on_tbDelete_clicked(self, button):
         (model, iter) = self.tselConnection.get_selected()
-        os.remove('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'),
-            model.get_value(iter, 0).id))
+        model.get_value(iter, 0).remove()
         self.tsConnections.remove(iter)
 
     def on_tbConnect_clicked(self, button):
+        logger.debug('{button: %s}', button)
         (model, iter) = self.tselConnection.get_selected()
-        profile = model.get_value(iter, 0)
-        if profile.wnck_window is None:
-            self.refresh_window_list()
-            title = profile.get_title()
-            if self.windows.has_key(title):
-                profile.wnck_window = self.windows[title]
+        connection = model.get_value(iter, 0)
+        logger.debug(connection)
         if button is not None:
             status_context = self.sStatus.get_context_id('rdesktop')
             self.sStatus.push(status_context,
-                    'Connecting to %s...' % (profile.ip,))
-            profile.connect()
-        self.refresh_connection_status(profile)
+                    'Connecting to %s...' % (connection.profile.ip,))
+            connection.connect()
+        self.refresh_connection_status(connection)
         self.sStatus.pop(status_context)
-        GLib.timeout_add_seconds(1, self.check_process, profile)
+        GLib.timeout_add_seconds(1, self.check_connection, connection)
 
     def on_tbDisconnect_clicked(self, button):
         (model, iter) = self.tselConnection.get_selected()
-        profile = model.get_value(iter, 0)
-        profile.disconnect()
+        model.get_value(iter, 0).disconnect()
 
     def on_tbPreferences_clicked(self, button):
         # TODO: implement
@@ -295,25 +339,21 @@ class RDPClient:
         profile.ip = self.dlgBuilder.get_object('eIPorName').get_text()
         profile.name = self.dlgBuilder.get_object('eName').get_text()
         group_list = self.dlgBuilder.get_object('cbGroup')
+        # TODO: optimize assigning of group
         if group_list.get_active_id() is None:
             profile.group = ''
         else:
             profile.group = group_list.get_model().get_value(
                     group_list.get_active_iter(), 0)
-        profile.username = \
-                self.dlgBuilder.get_object('eUsername').get_text()
-        profile.password = \
-                self.dlgBuilder.get_object('ePassword').get_text().encode(
-                        'base64').encode('rot13')
+        profile.username = self.dlgBuilder.get_object('eUsername').get_text()
+        profile.password = self.dlgBuilder.get_object('ePassword').get_text()
         profile.domain = self.dlgBuilder.get_object('eDomain').get_text()
-        share_folder = self.dlgBuilder.get_object('fcbShare').get_uri()
-        if share_folder is None:
-            profile.share = ''
-        else:
-            profile.share = urlparse(share_folder).path
+        uri = self.dlgBuilder.get_object('fcbShare').get_uri()
+        profile.share = urlparse(uri).path if uri is not None else ''
         if self.active_profile is None:
-            profile.iter = self.tsConnections.append(None, [profile,
-                self.discon_ico, self.win_ico, profile.get_title()])
+            connection = RDPConnection(profile)
+            connection.iter = self.tsConnections.append(None, [connection,
+                self.discon_ico, self.win_ico, connection.profile.get_title()])
         profile.save()
         self.dlgConnection.destroy()
 
@@ -323,14 +363,16 @@ class RDPClient:
         self.builder.get_object('tbDelete').set_sensitive(True)
         (model, iter) = self.tselConnection.get_selected()
         if iter is not None:
-            profile = model.get_value(iter, 0)
-            self.refresh_connection_status(profile)
+            connection = model.get_value(iter, 0)
+            self.refresh_connection_status(connection)
 
     def on_eIPorName_changed(self, widget):
-        self.dlgBuilder.get_object('btnSave').set_sensitive(len(widget.get_text()) > 0)
+        self.dlgBuilder.get_object('btnSave').set_sensitive(
+                len(widget.get_text()) > 0)
 
     def on_eGroupName_changed(self, widget):
-        self.dlgGroupBuilder.get_object('btnGroupSave').set_sensitive(len(widget.get_text()) > 0)
+        self.dlgGroupBuilder.get_object('btnGroupSave').set_sensitive(
+                len(widget.get_text()) > 0)
 
     def on_bAddGroup_clicked(self, button):
         self.dlgGroupBuilder = Gtk.Builder()
@@ -358,12 +400,19 @@ class RDPClient:
     def gtk_main_quit(self, *args):
         Gtk.main_quit()
 
+logging.basicConfig(filename='rdpclient.log',
+    format='%(asctime)s %(name)s %(funcName)s %(levelname)s %(message)s',
+    level=logging.DEBUG)
+logger = logging.getLogger('rdpclient')
 
 try:
     os.makedirs('%s/.rdpclient' % (os.getenv('HOME'),))
+    logger.debug('trying to create .rdpclient directory')
 except OSError as exception:
     if exception.errno != os.errno.EEXIST:
+        logger.debug('can not create .rdpclient directory')
         raise
+    logger.debug('.rdpclient directory already exists')
 
 app = RDPClient()
 app.awRDPClient.show_all()

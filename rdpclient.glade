@@ -270,7 +270,7 @@
           </packing>
         </child>
         <child>
-          <object class="GtkNotebook" id="notebook1">
+          <object class="GtkNotebook" id="nbConnectionProperties">
             <property name="visible">True</property>
             <property name="can_focus">False</property>
             <child>
@@ -359,7 +359,7 @@
                           <object class="GtkEntry" id="eGroup">
                             <property name="visible">True</property>
                             <property name="can_focus">True</property>
-                            <property name="text" translatable="yes">Выберите группу из списка</property>
+                            <property name="placeholder_text" translatable="yes">Выберите группу из списка</property>
                             <property name="input_purpose">name</property>
                           </object>
                         </child>
@@ -726,6 +726,7 @@
                     <property name="visible">True</property>
                     <property name="can_focus">False</property>
                     <property name="model">tsConnectionGroup</property>
+                    <property name="has_entry">True</property>
                     <property name="id_column">0</property>
                     <child>
                       <object class="GtkCellRendererText" id="crtGroupName">
@@ -736,6 +737,12 @@
                       <attributes>
                         <attribute name="text">0</attribute>
                       </attributes>
+                    </child>
+                    <child internal-child="entry">
+                      <object class="GtkEntry" id="eParentGroup">
+                        <property name="can_focus">False</property>
+                        <property name="placeholder_text" translatable="yes">Выберите группу из списка</property>
+                      </object>
                     </child>
                   </object>
                 </child>
