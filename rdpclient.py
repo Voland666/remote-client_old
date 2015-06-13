@@ -104,7 +104,7 @@ class RDPProfile:
 
     def remove(self):
         self.__clear_password()
-        os.remove('%s/.rdpclicleaent/%s.rdpc' % (os.getenv('HOME'), self.id))
+        os.remove('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id))
         self.id = None
 
 
@@ -119,7 +119,7 @@ class RDPConnection:
     def __str__(self):
         return '%s: {profile: %s}' % (self.__class__, self.profile)
 
-    def set_window(self):
+    def find_window(self):
         title = self.profile.get_title() if self.profile is not None else '[]'
         logger.debug('title: %s' % (title,))
         if len(title) > 2:
@@ -130,8 +130,9 @@ class RDPConnection:
             logger.debug('window: %s' % (window,))
             if len(window) == 1:
                 self.window = window[0]
-                return
+                return True
         self.window = None
+        return False
 
     def connect(self):
         logger.debug('{is_connected: %s}', self.is_connected())
@@ -143,7 +144,7 @@ class RDPConnection:
                 self.window.activate(time.time())
         else:
             self.pid = Popen(self.profile.get_rdp_command()).pid
-            self.set_window()
+            self.find_window()
 
     def disconnect(self):
         if self.is_connected():
@@ -177,8 +178,7 @@ class RDPClient:
         self.builder.connect_signals(self)
         self.__load_objects()
 
-        self.tsConnections = Gtk.TreeStore(GObject.TYPE_PYOBJECT,
-                GdkPixbuf.Pixbuf, GdkPixbuf.Pixbuf, str)
+        self.tsConnections = Gtk.TreeStore(GObject.TYPE_PYOBJECT, str)
         ids = [splitext(basename(rdpc))[0] for rdpc in
                 glob.glob('%s/.rdpclient/*.rdpc' % (os.getenv('HOME'),))]
         self.win_ico = GdkPixbuf.Pixbuf.new_from_file_at_scale(
@@ -190,19 +190,17 @@ class RDPClient:
         for id in ids:
             profile = RDPProfile(id)
             title = profile.get_title()
-            logo_ico = self.discon_ico
             connection = RDPConnection(profile)
-            connection.set_window()
+            is_window_found = connection.find_window()
             logger.debug('connection %s; window: %s' % (connection,
                 connection.window))
-            if connection.window is not None:
+            if is_window_found:
                 connection.pid = int(Popen(['pgrep', '-f',
                     profile.get_title(True)], stdout=PIPE).communicate()[0])
                 logger.debug('found pid: %s' % (connection.pid,))
-                logo_ico = self.con_ico
             connection.iter = self.tsConnections.append(None,
-                    [connection, logo_ico, self.win_ico, title])
-            if logo_ico == self.con_ico:
+                    [connection, title])
+            if is_window_found:
                 GLib.timeout_add_seconds(1, self.check_connection, connection)
         self.tvConnections.set_model(self.tsConnections)
         render_state = Gtk.CellRendererPixbuf()
@@ -211,42 +209,58 @@ class RDPClient:
         self.tvcConnections.pack_start(render_state, expand=False)
         self.tvcConnections.pack_start(render_logo, expand=False)
         self.tvcConnections.pack_start(render_text, expand=True)
-        self.tvcConnections.add_attribute(render_state, 'pixbuf', 1)
-        self.tvcConnections.add_attribute(render_logo, 'pixbuf', 2)
+        self.tvcConnections.set_cell_data_func(render_state,
+                self.conn_cell_state_func)
+        self.tvcConnections.set_cell_data_func(render_logo,
+                self.conn_cell_logo_func)
         self.tvcConnections.set_cell_data_func(render_text,
-                self.conn_cell_data_func)
+                self.conn_cell_title_func)
         self.tvcConnections.clicked()
 
     def __load_objects(self):
+        logger.debug('>')
         for obj in ['awRDPClient', 'sStatus', 'tvConnections',
                 'tvcConnections', 'tselConnection']:
             setattr(self, obj, self.builder.get_object(obj))
+        logger.debug('<')
 
     def check_connection(self, connection):
         return (connection.is_connected() or
                 self.refresh_connection_status(connection) or False)
 
-    def conn_cell_data_func(self, column, cell, model, iter, col_key):
-        connection = model.get_value(iter, 0)
-        cell.set_property('text', connection.profile.get_title())
+    def conn_cell_state_func(self, column, cell, model, iter, data):
+        logger.debug('>')
+        cell.set_property('pixbuf', self.con_ico
+                if model.get_value(iter, 0).is_connected() else self.discon_ico)
+        logger.debug('<')
+
+    def conn_cell_logo_func(self, column, cell, model, iter, data):
+        logger.debug('>')
+        cell.set_property('pixbuf', self.win_ico)
+        logger.debug('<')
+
+    def conn_cell_title_func(self, column, cell, model, iter, data):
+        logger.debug('>')
+        cell.set_property('text', model.get_value(iter, 0).profile.get_title())
+        logger.debug('<')
 
     def refresh_connection_status(self, connection):
-        if connection.is_connected():
-            self.builder.get_object('tbConnect').set_sensitive(False)
-            self.builder.get_object('tbDisconnect').set_sensitive(True)
-            self.tsConnections.set_value(connection.iter, 1, self.con_ico)
-        else:
-            self.builder.get_object('tbConnect').set_sensitive(True)
-            self.builder.get_object('tbDisconnect').set_sensitive(False)
-            self.tsConnections.set_value(connection.iter, 1, self.discon_ico)
+        logger.debug('>')
+        self.tvConnections.queue_draw()
+        self.on_tselConnection_changed(self.tselConnection)
+        if not connection.is_connected():
             connection.disconnect()
+        logger.debug('<')
 
     def on_tvConnections_double_click(self, widget, event):
+        logger.debug('>')
         if (event.button == 1 and
             event.type == Gdk.EventType.DOUBLE_BUTTON_PRESS):
                 self.on_tbConnect_clicked(False)
+        logger.debug('<')
 
     def on_tbAdd_clicked(self, button):
+        logger.debug('>')
         self.dlgBuilder = Gtk.Builder()
         self.dlgBuilder.add_objects_from_file('rdpclient.glade',
                 ['dlgConnection', 'tsConnectionGroups', 'tsConnections',
@@ -256,8 +270,10 @@ class RDPClient:
         self.dlgBuilder.get_object('btnSave').set_sensitive(False)
         self.active_profile = None
         self.dlgConnection.run()
+        logger.debug('<')
 
     def on_tbCopy_clicked(self, button):
+        logger.debug('>')
         self.dlgBuilder = Gtk.Builder()
         self.dlgBuilder.add_objects_from_file('rdpclient.glade',
                 ['dlgConnection', 'tsConnectionGroups', 'awRDPClient'])
@@ -279,8 +295,10 @@ class RDPClient:
         self.dlgConnection.show_all()
         self.active_profile = None
         self.dlgConnection.run()
+        logger.debug('<')
 
     def on_tbUpdate_clicked(self, button):
+        logger.debug('>')
         self.dlgBuilder = Gtk.Builder()
         self.dlgBuilder.add_objects_from_file('rdpclient.glade',
                 ['dlgConnection', 'tsConnectionGroups', 'awRDPClient'])
@@ -302,35 +320,44 @@ class RDPClient:
         self.dlgConnection.show_all()
         self.active_profile = edit_profile
         self.dlgConnection.run()
+        logger.debug('<')
 
     def on_tbDelete_clicked(self, button):
+        logger.debug('>')
         (model, iter) = self.tselConnection.get_selected()
         model.get_value(iter, 0).remove()
         self.tsConnections.remove(iter)
+        logger.debug('<')
 
     def on_tbConnect_clicked(self, button):
+        logger.debug('>')
         logger.debug('{button: %s}', button)
         (model, iter) = self.tselConnection.get_selected()
         connection = model.get_value(iter, 0)
         logger.debug(connection)
-        if button is not None:
-            status_context = self.sStatus.get_context_id('rdesktop')
-            self.sStatus.push(status_context,
-                    'Connecting to %s...' % (connection.profile.ip,))
-            connection.connect()
+        #if button is not None:
+            #status_context = self.sStatus.get_context_id('rdesktop')
+            #self.sStatus.push(status_context,
+            #        'Connecting to %s...' % (connection.profile.ip,))
+        connection.connect()
         self.refresh_connection_status(connection)
-        self.sStatus.pop(status_context)
+        #self.sStatus.pop(status_context)
         GLib.timeout_add_seconds(1, self.check_connection, connection)
+        logger.debug('<')
 
     def on_tbDisconnect_clicked(self, button):
+        logger.debug('>')
         (model, iter) = self.tselConnection.get_selected()
         model.get_value(iter, 0).disconnect()
+        logger.debug('<')
 
     def on_tbPreferences_clicked(self, button):
+        logger.debug('>')
         # TODO: implement
-        pass
+        logger.debug('<')
 
     def on_btnSave_clicked(self, button):
+        logger.debug('>')
         self.dlgConnection.hide()
         if self.active_profile is None:
             profile = RDPProfile()
@@ -353,28 +380,40 @@ class RDPClient:
         if self.active_profile is None:
             connection = RDPConnection(profile)
             connection.iter = self.tsConnections.append(None, [connection,
-                self.discon_ico, self.win_ico, connection.profile.get_title()])
+                connection.profile.get_title()])
         profile.save()
         self.dlgConnection.destroy()
+        logger.debug('<')
 
     def on_tselConnection_changed(self, selection):
-        self.builder.get_object('tbCopy').set_sensitive(True)
-        self.builder.get_object('tbUpdate').set_sensitive(True)
-        self.builder.get_object('tbDelete').set_sensitive(True)
+        logger.debug('>')
         (model, iter) = self.tselConnection.get_selected()
-        if iter is not None:
-            connection = model.get_value(iter, 0)
-            self.refresh_connection_status(connection)
+        selected = iter is not None
+        connected = selected and model.get_value(iter, 0).is_connected()
+        logger.debug('selected: %s, connected: %s' % (selected, connected))
+        self.builder.get_object('tbCopy').set_sensitive(selected)
+        self.builder.get_object('tbUpdate').set_sensitive(selected)
+        self.builder.get_object('tbDelete').set_sensitive(selected)
+        self.builder.get_object('tbConnect').set_sensitive(selected and
+                not connected)
+        self.builder.get_object('tbDisconnect').set_sensitive(selected and
+                connected)
+        logger.debug('<')
 
     def on_eIPorName_changed(self, widget):
+        logger.debug('>')
         self.dlgBuilder.get_object('btnSave').set_sensitive(
                 len(widget.get_text()) > 0)
+        logger.debug('<')
 
     def on_eGroupName_changed(self, widget):
+        logger.debug('>')
         self.dlgGroupBuilder.get_object('btnGroupSave').set_sensitive(
                 len(widget.get_text()) > 0)
+        logger.debug('<')
 
     def on_bAddGroup_clicked(self, button):
+        logger.debug('>')
         self.dlgGroupBuilder = Gtk.Builder()
         self.dlgGroupBuilder.add_objects_from_file('rdpclient.glade',
                 ['dlgGroup', 'tsConnectionGroups', 'dlgConnection'])
@@ -383,19 +422,26 @@ class RDPClient:
         self.dlgGroupBuilder.get_object('btnGroupSave').set_sensitive(False)
         self.active_profile = None
         self.dlgGroup.run()
+        logger.debug('<')
 
     def on_btnGroupSave_clicked(self, button):
+        logger.debug('>')
         self.dlgGroup.hide()
         # TODO: Save group
         self.dlgGroup.destroy()
+        logger.debug('<')
 
     def on_btnGroupCancel_clicked(self, button):
+        logger.debug('>')
         self.dlgGroup.hide()
         self.dlgGroup.destroy()
+        logger.debug('<')
 
     def on_btnCancel_clicked(self, button):
+        logger.debug('>')
         self.dlgConnection.hide()
         self.dlgConnection.destroy()
+        logger.debug('<')
 
     def gtk_main_quit(self, *args):
         Gtk.main_quit()
