@@ -30,7 +30,7 @@ import logging
 #	7. Desctiption field in profile
 # DONE	8. Scroll connection list
 #	9. Preferences window (dir for .rdpc files, ...)
-#	10. Embed rdesktop in custom window
+#	10. Embed rdesktop in custom window (???)
 # DONE	11. Check existing connections on start
 #	12. Group manager
 #	13. Settings manager
@@ -40,6 +40,7 @@ import logging
 #	17. Folder size instead logo pixbuf
 #	18. Confirmation dialog on delete connection
 #	19. Save state for folders (opened/closed) and connections (on/off)
+#	20. Support ssh connections
 
 class RDPGroup:
     """
@@ -48,7 +49,7 @@ class RDPGroup:
 
     def __init__(self, name, parent=None):
         if name is None:
-            raise Exception.ValueError
+            raise ValueError('RDPGroup name can not be None')
         self.name, self.iter = name, None
         self.parent = parent
         self.full_name = self.__get_full_name()
@@ -63,7 +64,8 @@ class RDPGroup:
 
 class RDPProfile:
     """
-    RDPProfile is a data source with information for establishing of RDP session
+    RDPProfile is a data source with information for establishing of
+    RDP session
     """
 
     def __init__(self, id=None):
@@ -117,6 +119,7 @@ class RDPProfile:
 
     def get_rdp_command(self):
         params = 'nohup rdesktop -a 16 -N -g 1918x1040'.split()
+        params += ['-k', 'en-us']
         params += ['-r', 'clipboard:PRIMARYCLIPBOARD']
         params += ['-T', self.get_title()]
         if len(self.username) > 0:
@@ -170,7 +173,10 @@ class RDPConnection:
         if self.is_connected():
             logger.debug('{window: %s}', self.window)
             if self.window is None:
-                raise ValueError('Window not found for connection %s' % (self,))
+                self.find_window()
+            if self.window is None:
+                raise ValueError(
+                        'Window not found for connection %s' % (self,))
             else:
                 self.window.activate(time.time())
         else:
@@ -192,7 +198,7 @@ class RDPConnection:
                 #return err.errno == os.errno.ECHILD
                 # TODO: implement correct
                 pass
-            return os.path.exists('/proc/%s' % (self.pid,))
+            return os.path.exists('/proc/%d' % (self.pid,))
         return False
 
     def remove(self):
@@ -208,13 +214,13 @@ class RDPClient:
 
     def __init__(self):
         self.builder = Gtk.Builder()
-        self.builder.add_from_file('rdpclient.glade')
+        self.builder.add_from_file('%s/rdpclient.glade' % (cur_dir,))
         self.builder.connect_signals(self)
         self.__load_objects(self, self.builder, ['awRDPClient', 'sStatus',
             'tvConnections', 'tvcConnections', 'tselConnection', 'tbAdd',
             'tbCopy', 'tbUpdate', 'tbDelete', 'tbConnect', 'tbDisconnect'])
         self.win_ico = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                'icons/windows.svg', 16, 16, True)
+                '%s/icons/windows.svg' % (cur_dir,), 16, 16, True)
         self.con_ico = Gtk.IconTheme.get_default().load_icon(
                 'gtk-connect', 16, 0)
         self.discon_ico = Gtk.IconTheme.get_default().load_icon(
@@ -240,7 +246,7 @@ class RDPClient:
             if is_window_found:
                 connection.pid = int(Popen(['pgrep', '-f',
                     profile.get_title(True)], stdout=PIPE).communicate()[0])
-                logger.debug('found pid: %s' % (connection.pid,))
+                logger.debug('found pid: %d' % (connection.pid,))
             logger.debug('connection group: %s' % (connection.group,))
             connection.iter = self.tsConnections.append(connection.group.iter
                     if connection.group is not None else None,
@@ -319,9 +325,10 @@ class RDPClient:
                     cur_iter = store.iter_children(cur_iter)
                 else:
                     while group_level < max_group_level:
-                        cur_group = RDPGroup(group_tree[group_level], cur_group)
-                        cur_group.iter = store.append(cur_group.parent.iter, [
-                            cur_group, cur_group.name])
+                        cur_group = RDPGroup(
+                                group_tree[group_level], cur_group)
+                        cur_group.iter = store.append(cur_group.parent.iter,
+                                [cur_group, cur_group.name])
                         group_level += 1
                     logger.debug('return group: %s' % (cur_group,))
                     logger.debug('<')
@@ -331,10 +338,11 @@ class RDPClient:
                         else None
                 if cur_iter is None:
                     while group_level < max_group_level:
-                        cur_group = RDPGroup(group_tree[group_level], cur_group)
+                        cur_group = RDPGroup(
+                                group_tree[group_level], cur_group)
                         cur_group.iter = store.append(cur_group.parent.iter if
-                                cur_group.parent is not None else None, [
-                                    cur_group, cur_group.name])
+                                cur_group.parent is not None else None,
+                                [cur_group, cur_group.name])
                         group_level += 1
                     logger.debug('return group: %s' % (cur_group,))
                     logger.debug('<')
@@ -357,13 +365,15 @@ class RDPClient:
                 cell.set_property('pixbuf', self.dir_ico)
         else:
             cell.set_property('pixbuf', self.con_ico
-                if model.get_value(iter, 0).is_connected() else self.discon_ico)
+                if model.get_value(iter, 0).is_connected() \
+                        else self.discon_ico)
         logger.debug('<')
 
     def conn_cell_logo_func(self, column, cell, model, iter, data):
         logger.debug('>')
         node = model.get_value(iter, 0)
         if isinstance(node, RDPGroup):
+            # TODO: draw node size
             cell.set_property('pixbuf', None)
         else:
             cell.set_property('pixbuf', self.win_ico)
@@ -404,8 +414,8 @@ class RDPClient:
     def load_connection_dialog(self, connection, is_copy=False):
         logger.debug('>')
         self.dlgBuilder = Gtk.Builder()
-        self.dlgBuilder.add_objects_from_file('rdpclient.glade',
-                ['dlgConnection', 'tsConnections', 'awRDPClient'])
+        self.dlgBuilder.add_objects_from_file('%s/rdpclient.glade' %
+                (cur_dir,), ['dlgConnection', 'tsConnections', 'awRDPClient'])
         self.dlgBuilder.connect_signals(self)
         self.dlgConnection = self.dlgBuilder.get_object('dlgConnection')
         dialog = self.dlgConnection
@@ -600,8 +610,8 @@ class RDPClient:
     def load_group_dialog(self, group):
         logger.debug('>')
         self.dlgGroupBuilder = Gtk.Builder()
-        self.dlgGroupBuilder.add_objects_from_file('rdpclient.glade',
-                ['awRDPClient', 'dlgGroup', 'dlgConnection'])
+        self.dlgGroupBuilder.add_objects_from_file('%s/rdpclient.glade' %
+                (cur_dir,), ['awRDPClient', 'dlgGroup', 'dlgConnection'])
         self.dlgGroupBuilder.connect_signals(self)
         self.dlgGroup = self.dlgGroupBuilder.get_object('dlgGroup')
         dialog = self.dlgGroup
@@ -679,7 +689,8 @@ class RDPClient:
     def gtk_main_quit(self, *args):
         Gtk.main_quit()
 
-logging.basicConfig(filename='rdpclient.log',
+cur_dir = os.path.dirname(os.path.realpath(__file__))
+logging.basicConfig(filename='%s/rdpclient.log' % (cur_dir,),
     format='%(asctime)s %(name)s %(funcName)s %(levelname)s %(message)s',
     level=logging.INFO)
 logger = logging.getLogger('rdpclient')
