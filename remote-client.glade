@@ -2,9 +2,9 @@
 <!-- Generated with glade 3.18.3 -->
 <interface>
   <requires lib="gtk+" version="3.12"/>
-  <object class="GtkApplicationWindow" id="awRDPClient">
+  <object class="GtkApplicationWindow" id="awRemoteClient">
     <property name="can_focus">False</property>
-    <property name="title" translatable="yes">RDP Client</property>
+    <property name="title" translatable="yes">Remote Client</property>
     <property name="window_position">center</property>
     <property name="default_width">350</property>
     <property name="default_height">600</property>
@@ -218,7 +218,7 @@
     <property name="window_position">center</property>
     <property name="type_hint">normal</property>
     <property name="decorated">False</property>
-    <property name="transient_for">awRDPClient</property>
+    <property name="transient_for">awRemoteClient</property>
     <signal name="close" handler="on_btnCancel_clicked" swapped="no"/>
     <child internal-child="vbox">
       <object class="GtkBox" id="bConnection">

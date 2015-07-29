@@ -1,27 +1,23 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-from gi.repository import Gtk
-from gi.repository import Gdk
-from gi.repository import GObject
-from gi.repository import GdkPixbuf
-from gi.repository import GLib
-from gi.repository import Wnck
-from urlparse import urlparse
-from ConfigParser import SafeConfigParser
-from os.path import basename
-from os.path import splitext
-from subprocess import Popen
-from subprocess import PIPE
 import os
-import signal
-import uuid
+import sys
 import time
 import glob
+import signal
 import logging
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+from abc import ABCMeta
+from urlparse import urlparse
+from baseObject import BaseObject
+from subprocess import Popen, PIPE
+from os.path import basename, splitext
+from rcProfile import RCProfileAbstract, RCProfileRDP
+from gi.repository import Gtk, Gdk, GObject, GdkPixbuf, GLib, Wnck
 
 # TODO: 0. Refactoring of code
-# DONE	1. Save .rdpc files into other directory
+# DONE	1. Save .conf files into other directory
 # DONE	2. Sort by column
 # DONE	3. Buttons for Open/Close connection
 # DONE	4. Button for "Copy to New" connection
@@ -29,8 +25,8 @@ import logging
 #	6. Settings "Close all connections on exit"
 #	7. Desctiption field in profile
 # DONE	8. Scroll connection list
-#	9. Preferences window (dir for .rdpc files, ...)
-#	10. Embed rdesktop in custom window (???)
+#	9. Preferences window (dir for .conf files, ...)
+# SKIP	10. Embed rdesktop in custom window (?)
 # DONE	11. Check existing connections on start
 #	12. Group manager
 #	13. Settings manager
@@ -42,14 +38,21 @@ import logging
 #	19. Save state for folders (opened/closed) and connections (on/off)
 #	20. Support ssh connections
 
-class RDPGroup:
+class RCTreeNode(BaseObject):
     """
-    RDPGroup is a hierarchical caterory for RDPProfile
+    Define common behavior for connections and groups
+    """
+    __metaclass__ = ABCMeta
+
+
+class RCGroup(RCTreeNode):
+    """
+    RCGroup is a hierarchical caterory for RCProfileRDP
     """
 
     def __init__(self, name, parent=None):
         if name is None:
-            raise ValueError('RDPGroup name can not be None')
+            raise ValueError('RCGroup name can not be None')
         self.name, self.iter = name, None
         self.parent = parent
         self.full_name = self.__get_full_name()
@@ -62,90 +65,13 @@ class RDPGroup:
                 is not None else '', self.name)
 
 
-class RDPProfile:
+class RCConnection(RCTreeNode):
     """
-    RDPProfile is a data source with information for establishing of
-    RDP session
-    """
-
-    def __init__(self, id=None):
-        if id is None:
-            self.id = str(uuid.uuid1(0, 0)).replace('-', '')[:16]
-        else:
-            self.id = id
-            self.__read()
-
-    def __str__(self):
-        return '%s: {id: %s, title: %s}' % (self.__class__, self.id,
-                self.get_title())
-
-    def __read_password(self):
-        self.password = str(Popen(('secret-tool lookup profile %s' % (self.id,
-            )).split(), stdout=PIPE).communicate()[0])
-
-    def __save_password(self):
-        Popen(('secret-tool store --label="rdpclient" profile %s' % (self.id,
-            )).split(), stdin=PIPE).communicate(self.password)
-
-    def __clear_password(self):
-        Popen(('secret-tool clear profile %s' % (self.id,)).split())
-        self.password = ''
-
-    def __read(self):
-        self.__read_password()
-        parser = SafeConfigParser()
-        parser.read('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id))
-        if parser.has_section('main'):
-            for attr, value in parser.items('main'):
-                setattr(self, attr, value)
-
-    def get_title(self, escaped=False):
-        return '%(name)s%(slash)s[%(ip)s%(slash)s]' % {
-                'ip': self.ip if self.ip is not None else '',
-                'name': '%s ' % (self.name,) if (self.name is not None and
-                        len(self.name) > 0) else '',
-                'slash': '\\' if escaped else ''}
-
-    def save(self):
-        parser = SafeConfigParser()
-        parser.add_section('main')
-        for attr, value in self.__dict__.iteritems():
-            if attr not in ['id', 'password'] and value is not None:
-                parser.set('main', attr, value)
-        self.__save_password()
-        with open('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id,),
-                'wb') as configfile:
-            parser.write(configfile)
-
-    def get_rdp_command(self):
-        params = 'nohup rdesktop -a 16 -N -g 1918x1040'.split()
-        params += ['-k', 'en-us']
-        params += ['-r', 'clipboard:PRIMARYCLIPBOARD']
-        params += ['-T', self.get_title()]
-        if len(self.username) > 0:
-            params += ['-u', self.username]
-        if len(self.password) > 0:
-            params += ['-p', self.password]
-        if len(self.domain) > 0:
-            params += ['-d', self.domain]
-        if len(self.share) > 0:
-            params += ['-r', 'disk:rdpshare=%s' % (self.share,)]
-        params.append(self.ip)
-        return params
-
-    def remove(self):
-        self.__clear_password()
-        os.remove('%s/.rdpclient/%s.rdpc' % (os.getenv('HOME'), self.id))
-        self.id = None
-
-
-class RDPConnection:
-    """
-    RDPConnection is a RDP session manager
+    RCConnection is a remote session manager
     """
 
     def __init__(self, profile=None):
-        self.profile = RDPProfile() if profile is None else profile
+        self.profile = RCProfileRDP() if profile is None else profile
         self.pid = None
         self.iter = None
         self.window = None
@@ -180,7 +106,7 @@ class RDPConnection:
             else:
                 self.window.activate(time.time())
         else:
-            self.pid = Popen(self.profile.get_rdp_command()).pid
+            self.pid = Popen(self.profile.get_command()).pid
             self.find_window()
 
     def disconnect(self):
@@ -198,7 +124,7 @@ class RDPConnection:
                 #return err.errno == os.errno.ECHILD
                 # TODO: implement correct
                 pass
-            return os.path.exists('/proc/%d' % (self.pid,))
+            return os.path.exists(os.path.join('/proc', str(self.pid)))
         return False
 
     def remove(self):
@@ -207,16 +133,17 @@ class RDPConnection:
         self.iter = None
 
 
-class RDPClient:
+class RemoteClient:
     """
-    RDPClient is a manager of RDPConnections
+    RemoteClient is a manager of RCConnections
     """
 
     def __init__(self):
         self.builder = Gtk.Builder()
-        self.builder.add_from_file('%s/rdpclient.glade' % (cur_dir,))
+        self.builder.add_from_file(
+                os.path.join(cur_dir, 'remote-client.glade'))
         self.builder.connect_signals(self)
-        self.__load_objects(self, self.builder, ['awRDPClient', 'sStatus',
+        self.__load_objects(self, self.builder, ['awRemoteClient', 'sStatus',
             'tvConnections', 'tvcConnections', 'tselConnection', 'tbAdd',
             'tbCopy', 'tbUpdate', 'tbDelete', 'tbConnect', 'tbDisconnect'])
         self.win_ico = GdkPixbuf.Pixbuf.new_from_file_at_scale(
@@ -230,14 +157,15 @@ class RDPClient:
         self.opendir_ico = Gtk.IconTheme.get_default().load_icon(
                 'document-open', 16, 0)
         self.required_sign = ' <span foreground="red">*</span>'
-        ids = [splitext(basename(rdpc))[0] for rdpc in
-                glob.glob('%s/.rdpclient/*.rdpc' % (os.getenv('HOME'),))]
+        ids = [splitext(basename(conf))[0] for conf in
+                glob.glob(os.path.join(RCProfileAbstract.CONFIG_FILE_DIR,
+                    '*.conf'))]
         self.tsConnections = Gtk.TreeStore(GObject.TYPE_PYOBJECT, str)
         self.tsConnectionGroups = self.tsConnections.filter_new()
         self.tsConnectionGroups.set_visible_func(self.groups_filter_func)
         for id in ids:
-            profile = RDPProfile(id)
-            connection = RDPConnection(profile)
+            profile = RCProfileRDP(id)
+            connection = RCConnection(profile)
             logger.debug('profile group: %s' % (profile.group,))
             connection.group = self.get_group_by_full_name(profile.group)
             is_window_found = connection.find_window()
@@ -245,7 +173,8 @@ class RDPClient:
                 connection.window))
             if is_window_found:
                 connection.pid = int(Popen(['pgrep', '-f',
-                    profile.get_title(True)], stdout=PIPE).communicate()[0])
+                    profile.escape_chars('[]', profile.get_title())],
+                    stdout=PIPE).communicate()[0])
                 logger.debug('found pid: %d' % (connection.pid,))
             logger.debug('connection group: %s' % (connection.group,))
             connection.iter = self.tsConnections.append(connection.group.iter
@@ -277,9 +206,9 @@ class RDPClient:
     def groups_filter_func(self, model, iter, data):
         logger.debug('>')
         logger.debug('filter: %s' % (isinstance(model.get_value(iter, 0),
-            RDPGroup),))
+            RCGroup),))
         logger.debug('<')
-        return isinstance(model.get_value(iter, 0), RDPGroup)
+        return isinstance(model.get_value(iter, 0), RCGroup)
 
     def match_column_value(self, row, column, value):
         logger.debug('>')
@@ -325,7 +254,7 @@ class RDPClient:
                     cur_iter = store.iter_children(cur_iter)
                 else:
                     while group_level < max_group_level:
-                        cur_group = RDPGroup(
+                        cur_group = RCGroup(
                                 group_tree[group_level], cur_group)
                         cur_group.iter = store.append(cur_group.parent.iter,
                                 [cur_group, cur_group.name])
@@ -338,7 +267,7 @@ class RDPClient:
                         else None
                 if cur_iter is None:
                     while group_level < max_group_level:
-                        cur_group = RDPGroup(
+                        cur_group = RCGroup(
                                 group_tree[group_level], cur_group)
                         cur_group.iter = store.append(cur_group.parent.iter if
                                 cur_group.parent is not None else None,
@@ -358,7 +287,7 @@ class RDPClient:
     def conn_cell_state_func(self, column, cell, model, iter, data):
         logger.debug('>')
         node = model.get_value(iter, 0)
-        if isinstance(node, RDPGroup):
+        if isinstance(node, RCGroup):
             if self.tvConnections.row_expanded(model.get_path(iter)):
                 cell.set_property('pixbuf', self.opendir_ico)
             else:
@@ -372,7 +301,7 @@ class RDPClient:
     def conn_cell_logo_func(self, column, cell, model, iter, data):
         logger.debug('>')
         node = model.get_value(iter, 0)
-        if isinstance(node, RDPGroup):
+        if isinstance(node, RCGroup):
             # TODO: draw node size
             cell.set_property('pixbuf', None)
         else:
@@ -382,7 +311,7 @@ class RDPClient:
     def conn_cell_title_func(self, column, cell, model, iter, data):
         logger.debug('>')
         node = model.get_value(iter, 0)
-        if isinstance(node, RDPGroup):
+        if isinstance(node, RCGroup):
             cell.set_property('text', node.name)
         else:
             cell.set_property('text', node.profile.get_title())
@@ -402,7 +331,7 @@ class RDPClient:
             event.type == Gdk.EventType.DOUBLE_BUTTON_PRESS):
             (model, iter) = self.tselConnection.get_selected()
             node = model.get_value(iter, 0)
-            if isinstance(node, RDPGroup):
+            if isinstance(node, RCGroup):
                 if widget.row_expanded(model.get_path(iter)):
                     widget.collapse_row(model.get_path(iter))
                 else:
@@ -414,8 +343,9 @@ class RDPClient:
     def load_connection_dialog(self, connection, is_copy=False):
         logger.debug('>')
         self.dlgBuilder = Gtk.Builder()
-        self.dlgBuilder.add_objects_from_file('%s/rdpclient.glade' %
-                (cur_dir,), ['dlgConnection', 'tsConnections', 'awRDPClient'])
+        self.dlgBuilder.add_objects_from_file(
+                os.path.join(cur_dir, 'remote-client.glade'),
+                ['dlgConnection', 'tsConnections', 'awRemoteClient'])
         self.dlgBuilder.connect_signals(self)
         self.dlgConnection = self.dlgBuilder.get_object('dlgConnection')
         dialog = self.dlgConnection
@@ -503,7 +433,7 @@ class RDPClient:
         dlg = self.dlgConnection
         dlg.hide()
         profile = dlg.connection.profile if dlg.connection is not None \
-                else RDPProfile()
+                else RCProfileRDP()
         profile.ip = dlg.eIPorName.get_text()
         profile.name = dlg.eName.get_text()
         group_iter = self.tsConnectionGroups.convert_iter_to_child_iter(
@@ -516,7 +446,7 @@ class RDPClient:
         profile.domain = dlg.eDomain.get_text()
         profile.share = urlparse(dlg.fcbShare.get_uri()).path \
                 if dlg.chbHasShare.get_active() else ''
-        connection = dlg.connection or RDPConnection(profile)
+        connection = dlg.connection or RCConnection(profile)
         connection.group = self.get_group_by_full_name(profile.group)
         if dlg.connection is not None:
             self.tsConnections.remove(dlg.connection.iter)
@@ -529,7 +459,7 @@ class RDPClient:
     def on_tselConnection_changed(self, selection):
         logger.debug('>')
         (model, iter) = self.tselConnection.get_selected()
-        is_folder = isinstance(model.get_value(iter, 0), RDPGroup) \
+        is_folder = isinstance(model.get_value(iter, 0), RCGroup) \
                 if iter is not None else False
         selected = iter is not None and not is_folder
         connected = selected and model.get_value(iter, 0).is_connected()
@@ -610,8 +540,9 @@ class RDPClient:
     def load_group_dialog(self, group):
         logger.debug('>')
         self.dlgGroupBuilder = Gtk.Builder()
-        self.dlgGroupBuilder.add_objects_from_file('%s/rdpclient.glade' %
-                (cur_dir,), ['awRDPClient', 'dlgGroup', 'dlgConnection'])
+        self.dlgGroupBuilder.add_objects_from_file(
+                os.path.join(cur_dir, 'remote-client.glade'),
+                ['awRemoteClient', 'dlgGroup', 'dlgConnection'])
         self.dlgGroupBuilder.connect_signals(self)
         self.dlgGroup = self.dlgGroupBuilder.get_object('dlgGroup')
         dialog = self.dlgGroup
@@ -639,7 +570,7 @@ class RDPClient:
         parent = None if parent_iter is None else \
                 self.tsConnections.get_value(parent_iter, 0)
         logger.debug('parent: %s' % (parent,))
-        group = RDPGroup(self.dlgGroup.eGroupName.get_text(), parent)
+        group = RCGroup(self.dlgGroup.eGroupName.get_text(), parent)
         if self.get_group_by_full_name(group.full_name) is None:
             group.iter = self.tsConnections.append(parent_iter,
                     [group, group.name])
@@ -690,21 +621,22 @@ class RDPClient:
         Gtk.main_quit()
 
 cur_dir = os.path.dirname(os.path.realpath(__file__))
-logging.basicConfig(filename='%s/rdpclient.log' % (cur_dir,),
-    format='%(asctime)s %(name)s %(funcName)s %(levelname)s %(message)s',
-    level=logging.INFO)
-logger = logging.getLogger('rdpclient')
+logging.basicConfig(
+        filename=os.path.join(cur_dir, 'remote-client.log'),
+        format='%(asctime)s %(name)s %(funcName)s %(levelname)s %(message)s',
+        level=logging.DEBUG)
+logger = logging.getLogger('remote-client')
 
 try:
-    os.makedirs('%s/.rdpclient' % (os.getenv('HOME'),))
-    logger.debug('trying to create .rdpclient directory')
+    os.makedirs(RCProfileAbstract.CONFIG_FILE_DIR)
+    logger.debug('trying to create .remote-client directory')
 except OSError as exception:
     if exception.errno != os.errno.EEXIST:
-        logger.debug('can not create .rdpclient directory')
+        logger.debug('can not create .remote-client directory')
         raise
-    logger.debug('.rdpclient directory already exists')
+    logger.debug('.remote-client directory already exists')
 
-app = RDPClient()
-app.awRDPClient.show_all()
+app = RemoteClient()
+app.awRemoteClient.show_all()
 
 Gtk.main()
