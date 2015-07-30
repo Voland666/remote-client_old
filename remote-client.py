@@ -31,7 +31,7 @@ from gi.repository import Gtk, Gdk, GObject, GdkPixbuf, GLib, Wnck
 #	12. Group manager
 #	13. Settings manager
 # DONE	14. Secure save password
-#	15. tbAdd button for Profile and Folder in one
+# DONE	15. tbAdd button for Profile and Folder in one
 #	16. Drag&Drop connections and folders
 #	17. Folder size instead logo pixbuf
 #	18. Confirmation dialog on delete connection
@@ -58,11 +58,11 @@ class RCGroup(RCTreeNode):
         self.full_name = self.__get_full_name()
 
     def __str__(self):
-        return '%s: {full_name: %s}' % (self.__class__, self.full_name)
+        return '{}: {{full_name: {}}}'.format(self.__class__, self.full_name)
 
     def __get_full_name(self):
-        return '%s%s' % ('%s|' % (self.parent.full_name,) if self.parent
-                is not None else '', self.name)
+        return '{}{}'.format('{}|'.format(self.parent.full_name)
+                if self.parent is not None else '', self.name)
 
 
 class RCConnection(RCTreeNode):
@@ -77,17 +77,17 @@ class RCConnection(RCTreeNode):
         self.window = None
 
     def __str__(self):
-        return '%s: {profile: %s}' % (self.__class__, self.profile)
+        return '{}: {{profile: {}}}'.format(self.__class__, self.profile)
 
     def find_window(self):
         title = self.profile.get_title() if self.profile is not None else '[]'
-        logger.debug('title: %s' % (title,))
+        logger.debug('title: %s', title)
         if len(title) > 2:
             while Gtk.events_pending():
                 Gtk.main_iteration()
             window = [win for win in Wnck.Screen.get_default().get_windows()
                     if win.get_name() == title]
-            logger.debug('window: %s' % (window,))
+            logger.debug('window: %s', window)
             if len(window) == 1:
                 self.window = window[0]
                 return True
@@ -95,14 +95,14 @@ class RCConnection(RCTreeNode):
         return False
 
     def connect(self):
-        logger.debug('{is_connected: %s}', self.is_connected())
+        logger.debug('is_connected: %s', self.is_connected())
         if self.is_connected():
-            logger.debug('{window: %s}', self.window)
+            logger.debug('window: %s', self.window)
             if self.window is None:
                 self.find_window()
             if self.window is None:
                 raise ValueError(
-                        'Window not found for connection %s' % (self,))
+                        'Window not found for connection {}'.format(self))
             else:
                 self.window.activate(time.time())
         else:
@@ -124,7 +124,7 @@ class RCConnection(RCTreeNode):
                 #return err.errno == os.errno.ECHILD
                 # TODO: implement correct
                 pass
-            return os.path.exists(os.path.join('/proc', str(self.pid)))
+            return os.path.exists(os.path.join(os.sep, 'proc', str(self.pid)))
         return False
 
     def remove(self):
@@ -144,8 +144,9 @@ class RemoteClient:
                 os.path.join(cur_dir, 'remote-client.glade'))
         self.builder.connect_signals(self)
         self.__load_objects(self, self.builder, ['awRemoteClient', 'sStatus',
-            'tvConnections', 'tvcConnections', 'tselConnection', 'tbAdd',
-            'tbCopy', 'tbUpdate', 'tbDelete', 'tbConnect', 'tbDisconnect'])
+            'tvConnections', 'tvcConnections', 'tselConnection', 'tbMenuAdd',
+            'tbCopy', 'tbUpdate', 'tbDelete', 'tbConnect', 'tbDisconnect',
+            'mAdd'])
         self.win_ico = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                 '%s/icons/windows.svg' % (cur_dir,), 16, 16, True)
         self.con_ico = Gtk.IconTheme.get_default().load_icon(
@@ -157,6 +158,7 @@ class RemoteClient:
         self.opendir_ico = Gtk.IconTheme.get_default().load_icon(
                 'document-open', 16, 0)
         self.required_sign = ' <span foreground="red">*</span>'
+        self.tbMenuAdd.set_menu(self.mAdd)
         ids = [splitext(basename(conf))[0] for conf in
                 glob.glob(os.path.join(RCProfileAbstract.CONFIG_FILE_DIR,
                     '*.conf'))]
@@ -166,17 +168,17 @@ class RemoteClient:
         for id in ids:
             profile = RCProfileRDP(id)
             connection = RCConnection(profile)
-            logger.debug('profile group: %s' % (profile.group,))
+            logger.debug('profile group: %s', profile.group)
             connection.group = self.get_group_by_full_name(profile.group)
             is_window_found = connection.find_window()
-            logger.debug('connection %s; window: %s' % (connection,
-                connection.window))
+            logger.debug('connection %s; window: %s', connection,
+                connection.window)
             if is_window_found:
                 connection.pid = int(Popen(['pgrep', '-f',
                     profile.escape_chars('[]', profile.get_title())],
                     stdout=PIPE).communicate()[0])
-                logger.debug('found pid: %d' % (connection.pid,))
-            logger.debug('connection group: %s' % (connection.group,))
+                logger.debug('found pid: %d', connection.pid)
+            logger.debug('connection group: %s', connection.group)
             connection.iter = self.tsConnections.append(connection.group.iter
                     if connection.group is not None else None,
                     [connection, profile.get_title()])
@@ -205,14 +207,14 @@ class RemoteClient:
 
     def groups_filter_func(self, model, iter, data):
         logger.debug('>')
-        logger.debug('filter: %s' % (isinstance(model.get_value(iter, 0),
-            RCGroup),))
+        logger.debug('filter: %s',
+                isinstance(model.get_value(iter, 0), RCGroup))
         logger.debug('<')
         return isinstance(model.get_value(iter, 0), RCGroup)
 
     def match_column_value(self, row, column, value):
         logger.debug('>')
-        logger.debug('match: %s' % (row[column] == value,))
+        logger.debug('match: %s', row[column] == value)
         logger.debug('<')
         return row[column] == value
 
@@ -259,7 +261,7 @@ class RemoteClient:
                         cur_group.iter = store.append(cur_group.parent.iter,
                                 [cur_group, cur_group.name])
                         group_level += 1
-                    logger.debug('return group: %s' % (cur_group,))
+                    logger.debug('return group: %s', cur_group)
                     logger.debug('<')
                     return cur_group
             else:
@@ -273,10 +275,10 @@ class RemoteClient:
                                 cur_group.parent is not None else None,
                                 [cur_group, cur_group.name])
                         group_level += 1
-                    logger.debug('return group: %s' % (cur_group,))
+                    logger.debug('return group: %s', cur_group)
                     logger.debug('<')
                     return cur_group
-        logger.debug('return group: %s' % (cur_group,))
+        logger.debug('return group: %s', cur_group)
         logger.debug('<')
         return cur_group
 
@@ -360,7 +362,7 @@ class RemoteClient:
             dialog.eName.set_text(connection.profile.name)
             dialog.chbHasGroup.set_active(len(connection.profile.group) > 0)
             if dialog.chbHasGroup.get_active():
-                logger.debug('group: %s' % (connection.profile.group,))
+                logger.debug('group: %s', connection.profile.group)
                 dialog.cbGroup.set_active_iter(
                         self.tsConnectionGroups.convert_child_iter_to_iter(
                             self.get_group_by_full_name(
@@ -370,16 +372,24 @@ class RemoteClient:
             dialog.eDomain.set_text(connection.profile.domain)
             dialog.chbHasShare.set_active(len(connection.profile.share) > 0)
             if dialog.chbHasShare.get_active():
-                dialog.fcbShare.set_uri('file://%s' %
-                    (connection.profile.share,))
+                dialog.fcbShare.set_uri(
+                        'file://{}'.format(connection.profile.share))
         dialog.show_all()
         self.check_save_connection()
         dialog.run()
         logger.debug('<')
 
-    def on_tbAdd_clicked(self, button):
+    def on_tbMenuAdd_clicked(self, button):
+        self.sStatus.push(self.sStatus.get_context_id('menu'), 'Menu clicked')
+
+    def on_miAddConnection_activate(self, menuitem):
         logger.debug('>')
         self.load_connection_dialog(None)
+        logger.debug('<')
+
+    def on_miAddGroup_activate(self, menuitem):
+        logger.debug('>')
+        self.load_group_dialog(None)
         logger.debug('<')
 
     def on_tbCopy_clicked(self, button):
@@ -403,7 +413,7 @@ class RemoteClient:
 
     def on_tbConnect_clicked(self, button):
         logger.debug('>')
-        logger.debug('{button: %s}', button)
+        logger.debug('button: %s', button)
         (model, iter) = self.tselConnection.get_selected()
         connection = model.get_value(iter, 0)
         logger.debug(connection)
@@ -463,8 +473,8 @@ class RemoteClient:
                 if iter is not None else False
         selected = iter is not None and not is_folder
         connected = selected and model.get_value(iter, 0).is_connected()
-        logger.debug('selected: %s, connected: %s' % (selected, connected))
-        self.tbAdd.set_sensitive(not is_folder)
+        logger.debug('selected: %s, connected: %s', selected, connected)
+        #self.tbMenuAdd.set_sensitive(not is_folder)
         self.tbCopy.set_sensitive(selected)
         self.tbUpdate.set_sensitive(selected)
         self.tbDelete.set_sensitive(selected)
@@ -475,9 +485,9 @@ class RemoteClient:
     def on_chbHasGroup_toggled(self, button):
         logger.debug('>')
         selected = button.get_active()
-        logger.debug('selected: %s' % (selected,))
-        self.dlgConnection.lGroup.set_markup('Группа%s' %
-                (self.required_sign if selected else '',))
+        logger.debug('selected: %s', selected)
+        self.dlgConnection.lGroup.set_markup(
+                'Группа{}'.format(self.required_sign if selected else ''))
         self.dlgConnection.cbGroup.set_sensitive(selected)
         self.dlgConnection.bAddGroup.set_sensitive(selected)
         self.check_save_connection()
@@ -486,7 +496,7 @@ class RemoteClient:
     def on_combobox_entry_button_press_event(self, entry, event):
         logger.debug('>')
         combo = entry.get_parent()
-        logger.debug('parent: %s' % (combo,))
+        logger.debug('parent: %s', combo)
         if combo.props.popup_shown:
             logger.debug('do popdown')
             combo.emit('popdown')
@@ -497,16 +507,16 @@ class RemoteClient:
 
     def on_cbGroup_changed(self, button):
         logger.debug('>')
-        logger.debug('new value: %s' % (button.get_active_id(),))
+        logger.debug('new value: %s', button.get_active_id())
         self.check_save_connection()
         logger.debug('<')
 
     def on_chbHasShare_toggled(self, button):
         logger.debug('>')
         selected = button.get_active()
-        logger.debug('selected: %s' % (selected,))
-        self.dlgConnection.lShare.set_markup('Общая папка%s' %
-                (self.required_sign if selected else '',))
+        logger.debug('selected: %s', selected)
+        self.dlgConnection.lShare.set_markup(
+                'Общая папка{}'.format(self.required_sign if selected else ''))
         self.dlgConnection.fcbShare.set_sensitive(selected)
         self.check_save_connection()
         logger.debug('<')
@@ -529,9 +539,9 @@ class RemoteClient:
                 self.dlgConnection.cbGroup.get_active_iter() is not None)
         share_valid = (not self.dlgConnection.chbHasShare.get_active() or
                 self.dlgConnection.fcbShare.get_uri() is not None)
-        logger.debug('len_eIPorName: %s, group_valid: %s, share_valid: %s'
-                % (len(self.dlgConnection.eIPorName.get_text()),
-                    group_valid, share_valid))
+        logger.debug('len_eIPorName: %s, group_valid: %s, share_valid: %s',
+                len(self.dlgConnection.eIPorName.get_text()),
+                group_valid, share_valid)
         self.dlgConnection.btnSave.set_sensitive(
                 len(self.dlgConnection.eIPorName.get_text()) > 0 and
                 group_valid and share_valid)
@@ -547,8 +557,8 @@ class RemoteClient:
         self.dlgGroup = self.dlgGroupBuilder.get_object('dlgGroup')
         dialog = self.dlgGroup
         self.__load_objects(dialog, self.dlgGroupBuilder,
-        ['btnGroupSave', 'lParentGroup', 'chbHasParentGroup', 'cbParentGroup',
-            'eGroupName'])
+                ['btnGroupSave', 'lParentGroup', 'chbHasParentGroup',
+                    'cbParentGroup', 'eGroupName'])
         dialog.cbParentGroup.set_model(self.tsConnectionGroups)
         dialog.group = group
         self.check_save_group()
@@ -569,7 +579,7 @@ class RemoteClient:
                         if has_parent else None
         parent = None if parent_iter is None else \
                 self.tsConnections.get_value(parent_iter, 0)
-        logger.debug('parent: %s' % (parent,))
+        logger.debug('parent: %s', parent)
         group = RCGroup(self.dlgGroup.eGroupName.get_text(), parent)
         if self.get_group_by_full_name(group.full_name) is None:
             group.iter = self.tsConnections.append(parent_iter,
@@ -596,8 +606,9 @@ class RemoteClient:
     def on_chbHasParentGroup_toggled(self, button):
         logger.debug('>')
         selected = button.get_active()
-        self.dlgGroup.lParentGroup.set_markup('Родительская группа%s' %
-                (self.required_sign if selected else '',))
+        self.dlgGroup.lParentGroup.set_markup(
+                'Родительская группа{}'.format(
+                    self.required_sign if selected else ''))
         self.dlgGroup.cbParentGroup.set_sensitive(selected)
         self.check_save_group()
         logger.debug('<')

@@ -5,9 +5,9 @@ import os
 import sys
 import uuid
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
-from abc import ABCMeta, abstractmethod
 from baseObject import BaseObject
 from subprocess import Popen, PIPE
+from abc import ABCMeta, abstractmethod
 from ConfigParser import SafeConfigParser
 
 
@@ -96,7 +96,7 @@ class RCProfileAbstract(BaseObject):
 
 class RCProfileRDP(RCProfileAbstract):
     """
-    Data source with information for establishing of RDP session
+    Data source with information for establishing of RDP connection
     """
 
     def __init__(self, id=None):
@@ -117,3 +117,11 @@ class RCProfileRDP(RCProfileAbstract):
             params += ['-r', 'disk:share=%s' % (self.share,)]
         params.append(self.ip)
         return params
+
+class RCProfileSSH(RCProfileAbstract):
+    """
+    Data source with information for establishing of SSH connection
+    """
+
+    def __init__(self, id=None):
+        super(RCProfileSSH, self).__init__(id)
