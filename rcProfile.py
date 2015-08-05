@@ -11,7 +11,7 @@ from abc import ABCMeta, abstractmethod
 from ConfigParser import SafeConfigParser
 
 
-class RCProfileAbstract(BaseObject):
+class RCProfile(BaseObject):
     """
     Common profile for rdp and ssh
     """
@@ -20,41 +20,40 @@ class RCProfileAbstract(BaseObject):
 
     def __init__(self, id=None):
         self.config_store = {
-                'main': ['ip', 'name', 'group', 'domain', 'username', 'share']
-                }
+            'main': ['ip', 'name', 'group', 'domain', 'username', 'share']}
         self.name, self.title, self.title_escaped = None, None, None
-        self.id = self.get_value(id,
-                str(uuid.uuid1(0, 0)).replace('-', '')[:16])
-        self.config_file_name = os.path.join(self.CONFIG_FILE_DIR,
-                '{}.conf'.format(self.id))
+        self.id = self.get_value(
+            id, str(uuid.uuid1(0, 0)).replace('-', '')[:16])
+        self.config_file_name = os.path.join(
+            self.CONFIG_FILE_DIR, '{}.conf'.format(self.id))
         if id is not None:
-            self.__read()
+            self._read()
 
     def __str__(self):
         return '{}: {{id: {}, title: {}}}'.format(
-                self.__class__, self.id, self.get_title())
+            self.__class__, self.id, self.get_title())
 
     def __repr__(self):
         return '<class {}: {{id: {}, title: {}}}>'.format(
-                self.__class__, self.id, self.get_title())
+            self.__class__, self.id, self.get_title())
 
-    def __read_password(self):
-        return str(Popen(('secret-tool lookup profile {}'.format(self.id
-            )).split(), stdout=PIPE).communicate()[0])
+    def _read_password(self):
+        return str(Popen(('secret-tool lookup profile {}'.format(
+            self.id)).split(), stdout=PIPE).communicate()[0])
 
-    def __save_password(self):
+    def _save_password(self):
         Popen(('secret-tool store --label="remote-client" profile {}'.format(
             self.id)).split(), stdin=PIPE).communicate(self.password)
 
-    def __clear_password(self):
+    def _clear_password(self):
         Popen(('secret-tool clear profile {}'.format(self.id)).split())
         self.password = ''
 
-    def __read(self):
+    def _read(self):
         if not os.path.exists(self.config_file_name):
             raise IOError("Config file '{}' not found".format(
                 self.config_file_name))
-        self.password = self.__read_password()
+        self.password = self._read_password()
         parser = SafeConfigParser()
         parser.read(self.config_file_name)
         for section, attributes in self.config_store.iteritems():
@@ -63,15 +62,15 @@ class RCProfileAbstract(BaseObject):
             for attribute, value in parser.items(section):
                 if attribute not in attributes:
                     raise KeyError(
-                            "Invalid attribute '{}' in config file".format(
-                                attribute))
+                        "Invalid attribute '{}' in config file".format(
+                            attribute))
                 setattr(self, attribute, value)
 
     def get_title(self):
         if self.title is None:
-            self.title = '{1}[{0}]'.format(self.get_value(self.ip, ''),
-                    '{} '.format(self.name) if self.is_non_zero(
-                        self.name) else '')
+            self.title = '{1}[{0}]'.format(
+                self.get_value(self.ip, ''),
+                '{} '.format(self.name) if self.is_non_zero(self.name) else '')
         return self.title
 
     def save(self):
@@ -80,13 +79,13 @@ class RCProfileAbstract(BaseObject):
             parser.add_section(section)
             for attribute in attributes:
                 parser.set(section, attribute, self.get(attribute, ''))
-            self.__save_password()
+            self._save_password()
             with open(self.config_file_name, 'wb') as configfile:
                 parser.write(configfile)
         self.title = None
 
     def remove(self):
-        self.__clear_password()
+        self._clear_password()
         os.remove(self.config_file_name)
         self.id = None
 
@@ -94,7 +93,8 @@ class RCProfileAbstract(BaseObject):
     def get_command(self):
         return None
 
-class RCProfileRDP(RCProfileAbstract):
+
+class RCProfileRDP(RCProfile):
     """
     Data source with information for establishing of RDP connection
     """
@@ -118,7 +118,8 @@ class RCProfileRDP(RCProfileAbstract):
         params.append(self.ip)
         return params
 
-class RCProfileSSH(RCProfileAbstract):
+
+class RCProfileSSH(RCProfile):
     """
     Data source with information for establishing of SSH connection
     """
